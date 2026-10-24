@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nav2 Planner Lab</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#eef1f6;--card:#fff;--text:#18202e;--muted:#667085;--line:#dde2ea;--accent:#1f6feb;--tile:#f4f6fa}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b0e14;--card:#131822;--text:#e6eaf2;--muted:#8b95a8;--line:#222a38;--accent:#4da3ff;--tile:#0f141c}}
+:root[data-theme="dark"]{--bg:#0b0e14;--card:#131822;--text:#e6eaf2;--muted:#8b95a8;--line:#222a38;--accent:#4da3ff;--tile:#0f141c}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px}
+.wrap{max-width:1040px;margin:0 auto}
+header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.logo{width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,#2f8bff,#7c4dff);display:grid;place-items:center;font-size:22px;box-shadow:0 4px 18px rgba(47,139,255,.4)}
+h1{font-size:19px;margin:0;letter-spacing:.3px}
+.sub{margin:0;color:var(--muted);font-size:12.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+label{font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px}
+select,button{font:inherit;font-size:14px;padding:7px 12px;border-radius:9px;border:1px solid var(--line);background:var(--tile);color:var(--text);cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:linear-gradient(135deg,#2f8bff,#5b5bff);border:0;color:#fff;font-weight:600;box-shadow:0 3px 14px rgba(60,120,255,.4)}
+.frame{border-radius:12px;overflow:hidden;border:1px solid #2a3547;box-shadow:0 10px 40px rgba(0,0,0,.35),inset 0 0 0 1px rgba(255,255,255,.04);background:#10151d}
+canvas{width:100%;height:auto;display:block;touch-action:none;cursor:crosshair}
+.tel{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px}
+.tile{background:var(--tile);border:1px solid var(--line);border-radius:10px;padding:8px 11px}
+.tile small{display:block;color:var(--muted);font-size:10.5px;letter-spacing:1px;text-transform:uppercase}
+.tile b{font:600 16px ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+#desc{margin:10px 0 0;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="logo">🤖</div><div><h1>Nav2 Planner Lab</h1><p class="sub">Costmap-aware global planning with a differential-drive AMR and 2D LiDAR · 1 cell = 0.5 m</p></div></header>
+  <div class="card">
+    <div class="controls">
+      <label>Planner
+        <select id="algo">
+          <option value="astar">A* (Smac 2D)</option>
+          <option value="dijkstra">Dijkstra (NavFn)</option>
+          <option value="theta">Theta* (any-angle)</option>
+          <option value="greedy">Greedy Best-First</option>
+          <option value="rrt">RRT</option>
+          <option value="rrtstar">RRT*</option>
+        </select>
+      </label>
+      <label>Speed <input type="range" id="speed" min="1" max="10" value="3"></label>
+      <button class="primary" id="go">▶ Plan &amp; Drive</button>
+      <button id="stop">Reset</button>
+      <button id="rand">Random obstacles</button>
+      <button id="corr">Corridors</button>
+      <button id="clear">Clear</button>
+    </div>
+    <div class="frame"><canvas id="cv"></canvas></div>
+    <div class="tel">
+      <div class="tile"><small>Status</small><b id="st">IDLE</b></div>
+      <div class="tile"><small>Expanded / nodes</small><b id="ex">0</b></div>
+      <div class="tile"><small>Path length</small><b id="pl">–</b></div>
+      <div class="tile"><small>Velocity</small><b id="vel">0.00 m/s</b></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:#8c52ff"></i>Inflation costmap</span>
+      <span><i style="background:#ff4b8b"></i>Lethal zone (no-go)</span>
+      <span><i style="background:linear-gradient(90deg,#3a6de0,#2fc9a8,#e8c040)"></i>Expanded (early → late)</span>
+      <span><i style="background:#46ffbe"></i>Frontier</span>
+      <span><i style="background:#ffb347"></i>Path</span>
+      <span><i style="background:#38dcff"></i>LiDAR</span>
+      <span>Drag empty cells to build shelves · drag a shelf to erase · drag the dock / goal to move them</span>
+    </div>
+    <p id="desc"></p>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const W=40,H=26,C=24,M=.5,cv=$('cv');cv.width=W*C;cv.height=H*C;
+const ctx=cv.getContext('2d'),bk=document.createElement('canvas');bk.width=cv.width;bk.height=cv.height;
+const walls=new Uint8Array(W*H),dist=new Float32Array(W*H);let dirty=true;
+let start={x:4,y:13},goal={x:35,y:13};
+let viz={},gen=null,state='idle',acc=0,pathPts=null,pi=1,hold=0,trail=[],lastT=null;
+let robot={x:4.5,y:13.5,th:0,v:0,w:0,ph:0};
+const NAME={astar:'A* · SmacPlanner2D',dijkstra:'Dijkstra · NavFn',theta:'Theta* · ThetaStarPlanner',greedy:'Greedy Best-First',rrt:'RRT',rrtstar:'RRT*'};
+const SL={idle:'STANDBY',planning:'PLANNING',driving:'EXECUTING',done:'GOAL REACHED',fail:'NO PATH'};
+const DESC={
+astar:"A* expands the cell minimizing cost-so-far + heuristic, and here it also pays extra to pass through inflated (purple) cells, so paths keep a safe distance from shelves like Nav2's SmacPlanner2D.",
+dijkstra:"Dijkstra explores uniformly with no heuristic: optimal but slow, expanding a huge region. This is NavFn's default behaviour.",
+theta:"Theta* adds line-of-sight shortcuts to A*, producing straighter any-angle paths instead of grid-aligned zigzags.",
+greedy:"Greedy Best-First follows only the heuristic. Very fast, but the path is not guaranteed optimal.",
+rrt:"RRT grows a random tree through free space. Quick, but the resulting path is jagged and non-optimal.",
+rrtstar:"RRT* picks the cheapest parent and rewires the tree, so the path keeps improving as more samples are added."};
+
+const wall=(x,y)=>x<0||y<0||x>=W||y>=H||walls[y*W+x];
+const blocked=(x,y)=>{if(wall(x,y))return true;if((x===start.x&&y===start.y)||(x===goal.x&&y===goal.y))return false;return dist[y*W+x]<1.5};
+function free(ax,ay,bx,by){const n=Math.max(1,Math.ceil(Math.hypot(bx-ax,by-ay)/.2));
+  for(let i=0;i<=n;i++){const t=i/n;if(blocked(Math.floor(ax+(bx-ax)*t),Math.floor(ay+(by-ay)*t)))return false}return true}
+const pen=i=>dist[i]>=4?0:(4-dist[i])*.5;
+
+/* ---------- static layer: floor, costmap inflation, shelves ---------- */
+function bake(){
+  dirty=false;const ws=[];for(let i=0;i<W*H;i++)if(walls[i])ws.push(i%W,(i/W)|0);
+  for(let i=0;i<W*H;i++){const x=i%W,y=(i/W)|0;let m=1e4;
+    for(let k=0;k<ws.length;k+=2){const dx=ws[k]-x,dy=ws[k+1]-y,d=dx*dx+dy*dy;if(d<m)m=d}
+    dist[i]=Math.min(Math.sqrt(m),x+1,W-x,y+1,H-y)}
+  const b=bk.getContext('2d');
+  b.fillStyle='#10151d';b.fillRect(0,0,bk.width,bk.height);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){b.fillStyle=(x+y)%2?'#121821':'#0f141c';b.fillRect(x*C,y*C,C,C)}
+  b.strokeStyle='rgba(110,150,200,.07)';b.lineWidth=1;b.beginPath();
+  for(let x=0;x<=W;x++){b.moveTo(x*C+.5,0);b.lineTo(x*C+.5,H*C)}for(let y=0;y<=H;y++){b.moveTo(0,y*C+.5);b.lineTo(W*C,y*C+.5)}b.stroke();
+  for(let i=0;i<W*H;i++){const d=dist[i];if(walls[i]||d>=4.2)continue;
+    b.fillStyle=d<1.5?'rgba(255,75,139,.34)':`rgba(140,82,255,${.4*Math.exp(-(d-1.5)*.9)})`;b.fillRect(i%W*C,((i/W)|0)*C,C,C)}
+  b.fillStyle='rgba(0,0,0,.5)';for(let k=0;k<ws.length;k+=2)b.fillRect(ws[k]*C+4,ws[k+1]*C+6,C,C);
+  for(let k=0;k<ws.length;k+=2){const x=ws[k]*C,y=ws[k+1]*C;
+    b.fillStyle='#2a3342';b.beginPath();b.roundRect(x+1,y+1,C-2,C-2,3);b.fill();
+    b.fillStyle='#46536a';b.beginPath();b.roundRect(x+2,y+2,C-4,C*.42,2);b.fill();
+    b.fillStyle='rgba(255,255,255,.12)';b.fillRect(x+3,y+3,C-6,1.5);
+    b.strokeStyle='rgba(0,0,0,.35)';b.beginPath();b.moveTo(x+C*.5,y+2);b.lineTo(x+C*.5,y+C-2);b.moveTo(x+2,y+C*.62);b.lineTo(x+C-2,y+C*.62);b.stroke()}
+}
+
+/* ---------- planners ---------- */
+function* grid(kind){
+  const s=start.y*W+start.x,g=goal.y*W+goal.x;
+  const gc=new Float32Array(W*H).fill(Infinity),par=new Int32Array(W*H).fill(-1),closed=new Uint8Array(W*H);
+  viz.closed=closed;viz.ord=new Int32Array(W*H);
+  const hf=(x,y)=>{const dx=Math.abs(x-goal.x),dy=Math.abs(y-goal.y);return dx+dy+(Math.SQRT2-2)*Math.min(dx,dy)};
+  const f=i=>{const x=i%W,y=(i/W)|0;return kind==='dijkstra'?gc[i]:kind==='greedy'?hf(x,y):gc[i]+hf(x,y)};
+  const open=[s];viz.open=open;gc[s]=0;par[s]=s;let cnt=0;
+  const dirs=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  while(open.length){
+    let bi=0;for(let k=1;k<open.length;k++)if(f(open[k])<f(open[bi]))bi=k;
+    const u=open.splice(bi,1)[0];if(closed[u])continue;closed[u]=1;viz.ord[u]=++cnt;viz.count=cnt;
+    if(u===g){const p=[];let c=g;while(c!==s){p.push([c%W+.5,((c/W)|0)+.5]);c=par[c]}p.push([s%W+.5,((s/W)|0)+.5]);return p.reverse()}
+    const ux=u%W,uy=(u/W)|0;
+    for(const[dx,dy]of dirs){
+      const nx=ux+dx,ny=uy+dy;if(blocked(nx,ny))continue;
+      if(dx&&dy&&(blocked(ux+dx,uy)||blocked(ux,uy+dy)))continue;
+      const v=ny*W+nx;if(closed[v])continue;
+      let ng=gc[u]+Math.hypot(dx,dy)*(1+pen(v)),np=u;
+      if(kind==='theta'){const p=par[u],px=p%W,py=(p/W)|0;
+        if(p!==u&&free(px+.5,py+.5,nx+.5,ny+.5)){ng=gc[p]+Math.hypot(nx-px,ny-py)*(1+pen(v));np=p}}
+      if(ng<gc[v]){gc[v]=ng;par[v]=np;if(!open.includes(v))open.push(v)}
+    }
+    yield;
+  }
+  return null;
+}
+function* rrt(star){
+  const nodes=[{x:start.x+.5,y:start.y+.5,p:-1,c:0}],gx=goal.x+.5,gy=goal.y+.5,STEP=1.5,R=3.5;
+  viz.tree=nodes;let best=-1,bestC=Infinity,extra=0;
+  const pathOf=i=>{const p=[[gx,gy]];while(i>=0){p.push([nodes[i].x,nodes[i].y]);i=nodes[i].p}return p.reverse()};
+  for(let it=0;it<5000;it++){
+    const q=Math.random()<.08?[gx,gy]:[Math.random()*W,Math.random()*H];
+    let ni=0,nd=Infinity;nodes.forEach((n,i)=>{const d=(n.x-q[0])**2+(n.y-q[1])**2;if(d<nd){nd=d;ni=i}});
+    const n0=nodes[ni],d=Math.sqrt(nd)||1e-6,t=Math.min(STEP,d)/d;
+    const x=n0.x+(q[0]-n0.x)*t,y=n0.y+(q[1]-n0.y)*t;
+    if(!free(n0.x,n0.y,x,y)){yield;continue}
+    let par=ni,cost=n0.c+Math.hypot(x-n0.x,y-n0.y);
+    if(star)nodes.forEach((o,i)=>{const dd=Math.hypot(o.x-x,o.y-y);if(dd<R&&o.c+dd<cost&&free(o.x,o.y,x,y)){par=i;cost=o.c+dd}});
+    const id=nodes.push({x,y,p:par,c:cost})-1;viz.count=nodes.length;
+    if(star)nodes.forEach((o,i)=>{if(i===par||i===id)return;const dd=Math.hypot(o.x-x,o.y-y);if(dd<R&&cost+dd<o.c&&free(o.x,o.y,x,y)){o.p=id;o.c=cost+dd}});
+    const dg=Math.hypot(gx-x,gy-y);
+    if(dg<STEP&&free(x,y,gx,gy)){
+      if(!star)return pathOf(id);
+      if(cost+dg<bestC){bestC=cost+dg;best=id;viz.path=pathOf(id)}
+    }
+    if(star&&best>=0&&++extra>700)return pathOf(best);
+    yield;
+  }
+  return best>=0?pathOf(best):null;
+}
+const plen=p=>p.reduce((s,q,i)=>i?s+Math.hypot(q[0]-p[i-1][0],q[1]-p[i-1][1]):0,0)*M;
+function reset(){gen=null;state='idle';viz={};pathPts=null;trail=[];robot.v=robot.w=0;$('ex').textContent='0';$('pl').textContent='–'}
+function launch(){if(dirty)bake();reset();const a=$('algo').value;gen=(a==='rrt'||a==='rrtstar')?rrt(a==='rrtstar'):grid(a);state='planning';robot.x=start.x+.5;robot.y=start.y+.5}
+
+/* ---------- simulation loop ---------- */
+const norm=a=>Math.atan2(Math.sin(a),Math.cos(a));
+function frame(now){
+  if(dirty)bake();
+  const dt=Math.min(.05,lastT?(now-lastT)/1000:.016);lastT=now;const t=now/1000,sp=+$('speed').value;
+  if(state==='idle'){robot.x=start.x+.5;robot.y=start.y+.5}
+  if(state==='planning'){
+    acc+=Math.pow(1.5,sp-1)*.2;
+    while(acc>=1&&state==='planning'){acc--;const r=gen.next();
+      if(r.done){if(r.value){pathPts=r.value;viz.path=pathPts;pi=1;hold=.8;state='driving';$('pl').textContent=plen(pathPts).toFixed(1)+' m'}
+        else state='fail';break}}
+    $('ex').textContent=viz.count||0;
+    if(viz.path&&state==='planning')$('pl').textContent=plen(viz.path).toFixed(1)+' m ↓';
+  }else if(state==='driving'){
+    if(hold>0)hold-=dt;else{
+      const vmax=.7+sp*.28,L=1.3,last=pathPts[pathPts.length-1];
+      while(pi<pathPts.length-1&&Math.hypot(pathPts[pi][0]-robot.x,pathPts[pi][1]-robot.y)<L)pi++;
+      const tg=pathPts[pi],diff=norm(Math.atan2(tg[1]-robot.y,tg[0]-robot.x)-robot.th),dg=Math.hypot(last[0]-robot.x,last[1]-robot.y);
+      const vt=vmax*Math.max(0,Math.cos(diff))**2*Math.min(1,.25+dg/2.5);
+      robot.v+=(vt-robot.v)*Math.min(1,3*dt);
+      robot.w+=(Math.max(-4,Math.min(4,3*diff))-robot.w)*Math.min(1,8*dt);
+      robot.th+=robot.w*dt;robot.x+=Math.cos(robot.th)*robot.v*dt;robot.y+=Math.sin(robot.th)*robot.v*dt;robot.ph+=robot.v*dt;
+      const lt=trail[trail.length-1],ox=-Math.sin(robot.th)*.6,oy=Math.cos(robot.th)*.6;
+      if(!lt||Math.hypot(lt[0]+ox-robot.x-ox,lt[1]+oy-robot.y-oy)>.12){trail.push([robot.x+ox,robot.y+oy,robot.x-ox,robot.y-oy]);if(trail.length>260)trail.shift()}
+      if(dg<.12){state='done';robot.v=robot.w=0}
+    }
+  }
+  $('st').textContent=SL[state];$('vel').textContent=(robot.v*M).toFixed(2)+' m/s';
+  draw(t);requestAnimationFrame(frame);
+}
+
+/* ---------- rendering ---------- */
+function scan(){const N=160,o=[];for(let a=0;a<N;a++){const an=a/N*6.2832,c=Math.cos(an),s=Math.sin(an);let r=7,hit=false;
+  for(let d=.3;d<7;d+=.12)if(wall(Math.floor(robot.x+c*d),Math.floor(robot.y+s*d))){r=d;hit=true;break}
+  o.push([robot.x+c*r,robot.y+s*r,hit])}return o}
+function draw(t){
+  ctx.drawImage(bk,0,0);
+  if(viz.closed){const n=viz.count||1;for(let i=0;i<W*H;i++)if(viz.closed[i]){ctx.fillStyle=`hsla(${215-165*viz.ord[i]/n},80%,55%,.5)`;ctx.fillRect(i%W*C+1,((i/W)|0)*C+1,C-2,C-2)}}
+  if(viz.open){ctx.fillStyle='rgba(70,255,190,.9)';for(const i of viz.open){ctx.beginPath();ctx.arc((i%W+.5)*C,(((i/W)|0)+.5)*C,C*.16,0,7);ctx.fill()}}
+  if(viz.tree){ctx.strokeStyle='rgba(150,120,255,.75)';ctx.lineWidth=1.3;ctx.beginPath();
+    for(const n of viz.tree)if(n.p>=0){const p=viz.tree[n.p];ctx.moveTo(p.x*C,p.y*C);ctx.lineTo(n.x*C,n.y*C)}ctx.stroke();
+    ctx.fillStyle='rgba(190,170,255,.9)';for(const n of viz.tree){ctx.fillRect(n.x*C-1,n.y*C-1,2.5,2.5)}}
+  for(let c=0;c<5&&trail.length>2;c++){const a=Math.floor(trail.length*c/5),b=Math.floor(trail.length*(c+1)/5)+1;
+    ctx.strokeStyle=`rgba(130,200,255,${.07+c*.07})`;ctx.lineWidth=2;
+    for(const k of[0,2]){ctx.beginPath();for(let i=a;i<Math.min(b,trail.length);i++)i===a?ctx.moveTo(trail[i][k]*C,trail[i][k+1]*C):ctx.lineTo(trail[i][k]*C,trail[i][k+1]*C);ctx.stroke()}}
+  if(viz.path&&viz.path.length>1){ctx.save();ctx.lineJoin='round';ctx.lineCap='round';
+    const tr=()=>{ctx.beginPath();viz.path.forEach((p,i)=>i?ctx.lineTo(p[0]*C,p[1]*C):ctx.moveTo(p[0]*C,p[1]*C))};
+    tr();ctx.strokeStyle='rgba(255,179,71,.18)';ctx.lineWidth=9;ctx.stroke();
+    tr();ctx.shadowColor='#ffb347';ctx.shadowBlur=12;ctx.strokeStyle='#ffc065';ctx.lineWidth=2.5;ctx.setLineDash([10,8]);ctx.lineDashOffset=-t*30;ctx.stroke();ctx.restore()}
+  /* dock */
+  ctx.save();ctx.strokeStyle='rgba(77,163,255,.6)';ctx.setLineDash([4,4]);ctx.beginPath();ctx.roundRect(start.x*C-4,start.y*C-4,C+8,C+8,8);ctx.stroke();ctx.restore();
+  /* goal beacon */
+  const gx=(goal.x+.5)*C,gy=(goal.y+.5)*C;
+  for(let k=0;k<3;k++){const ph=(t*.7+k/3)%1;ctx.strokeStyle=`rgba(255,77,109,${(1-ph)*.7})`;ctx.lineWidth=2;ctx.beginPath();ctx.arc(gx,gy,C*(.3+ph*1.3),0,7);ctx.stroke()}
+  ctx.fillStyle='rgba(255,77,109,.9)';ctx.shadowColor='#ff4d6d';ctx.shadowBlur=14;ctx.beginPath();ctx.arc(gx,gy,C*.3,0,7);ctx.fill();ctx.shadowBlur=0;
+  ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(gx,gy,C*.13,0,7);ctx.moveTo(gx-C*.45,gy);ctx.lineTo(gx-C*.22,gy);ctx.moveTo(gx+C*.22,gy);ctx.lineTo(gx+C*.45,gy);ctx.moveTo(gx,gy-C*.45);ctx.lineTo(gx,gy-C*.22);ctx.moveTo(gx,gy+C*.22);ctx.lineTo(gx,gy+C*.45);ctx.stroke();
+  /* lidar */
+  const o=scan(),rx=robot.x*C,ry=robot.y*C;
+  const lg=ctx.createRadialGradient(rx,ry,0,rx,ry,7*C);lg.addColorStop(0,'rgba(56,220,255,.2)');lg.addColorStop(1,'rgba(56,220,255,.02)');
+  ctx.fillStyle=lg;ctx.beginPath();ctx.moveTo(rx,ry);for(const p of o)ctx.lineTo(p[0]*C,p[1]*C);ctx.closePath();ctx.fill();
+  ctx.fillStyle='rgba(130,245,255,.95)';for(const p of o)if(p[2])ctx.fillRect(p[0]*C-1.2,p[1]*C-1.2,2.6,2.6);
+  const sw=o[Math.floor(((t*5)%6.2832)/6.2832*o.length)];ctx.strokeStyle='rgba(130,245,255,.85)';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(rx,ry);ctx.lineTo(sw[0]*C,sw[1]*C);ctx.stroke();
+  drawRobot(t);
+  /* HUD */
+  ctx.font='600 12px ui-monospace,Menlo,monospace';ctx.fillStyle='rgba(190,215,255,.85)';ctx.fillText(NAME[$('algo').value]+'  ·  '+SL[state],14,22);
+  ctx.strokeStyle='rgba(190,215,255,.8)';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(14,H*C-16);ctx.lineTo(14+10*C,H*C-16);ctx.moveTo(14,H*C-20);ctx.lineTo(14,H*C-12);ctx.moveTo(14+10*C,H*C-20);ctx.lineTo(14+10*C,H*C-12);ctx.stroke();
+  ctx.fillText('5 m',20+10*C,H*C-12);
+}
+function drawRobot(t){
+  ctx.save();ctx.translate(robot.x*C,robot.y*C);ctx.rotate(robot.th);
+  const col=state==='done'?'80,255,160':state==='planning'?'255,190,80':'70,150,255',pu=.35+.12*Math.sin(t*4);
+  const ug=ctx.createRadialGradient(0,0,C*.3,0,0,C*1.25);ug.addColorStop(0,`rgba(${col},${pu})`);ug.addColorStop(1,`rgba(${col},0)`);ctx.fillStyle=ug;ctx.beginPath();ctx.arc(0,0,C*1.25,0,7);ctx.fill();
+  if(state==='driving'||state==='done'||state==='idle'){const lc=ctx.createRadialGradient(C*.6,0,0,C*.6,0,C*3.4);lc.addColorStop(0,'rgba(255,246,200,.3)');lc.addColorStop(1,'rgba(255,246,200,0)');
+    ctx.fillStyle=lc;ctx.beginPath();ctx.moveTo(C*.6,-C*.25);ctx.lineTo(C*3.4,-C*1.2);ctx.lineTo(C*3.4,C*1.2);ctx.lineTo(C*.6,C*.25);ctx.fill()}
+  ctx.fillStyle='rgba(0,0,0,.45)';ctx.beginPath();ctx.roundRect(-C*.65+3,-C*.45+4,C*1.3,C*.9,7);ctx.fill();
+  for(const s of[-1,1]){const wy=s*C*.58;ctx.fillStyle='#0b0d12';ctx.beginPath();ctx.roundRect(-C*.36,wy-C*.11,C*.72,C*.22,3);ctx.fill();
+    ctx.fillStyle='#3a4352';for(let k=0;k<4;k++){const x=C*.34-((robot.ph*C+k*.17*C)%(C*.68));ctx.fillRect(x,wy-C*.09,1.8,C*.18)}}
+  const g=ctx.createLinearGradient(0,-C*.45,0,C*.45);g.addColorStop(0,'#f1f4fa');g.addColorStop(1,'#8d99ad');
+  ctx.fillStyle=g;ctx.strokeStyle='rgba(0,0,0,.5)';ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(-C*.65,-C*.45,C*1.3,C*.9,7);ctx.fill();ctx.stroke();
+  ctx.fillStyle='#2f8bff';ctx.beginPath();ctx.roundRect(C*.36,-C*.4,C*.22,C*.8,3);ctx.fill();
+  ctx.fillStyle='#262e3b';ctx.beginPath();ctx.roundRect(-C*.5,-C*.3,C*.72,C*.6,4);ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.12)';ctx.fillRect(-C*.46,-C*.28,C*.64,2);
+  const pg=ctx.createRadialGradient(-C*.05,-C*.04,1,-C*.05,0,C*.2);pg.addColorStop(0,'#5b6676');pg.addColorStop(1,'#12161d');
+  ctx.fillStyle=pg;ctx.beginPath();ctx.arc(-C*.14,0,C*.19,0,7);ctx.fill();
+  ctx.strokeStyle='#38dcff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(-C*.14,0,C*.15,t*5-.5,t*5+.5);ctx.stroke();
+  for(const s of[-1,1]){ctx.fillStyle='#fff7cf';ctx.shadowColor='#fff3b0';ctx.shadowBlur=8;ctx.beginPath();ctx.arc(C*.62,s*C*.3,C*.06,0,7);ctx.fill();ctx.shadowBlur=0;
+    ctx.fillStyle='#ff3b3b';ctx.fillRect(-C*.66,s*C*.3-1.5,2.5,3)}
+  ctx.restore();
+}
+
+/* ---------- interaction ---------- */
+let drag=null,paint=1;
+const cellAt=e=>{const r=cv.getBoundingClientRect();return{x:Math.max(0,Math.min(W-1,Math.floor((e.clientX-r.left)/r.width*W))),y:Math.max(0,Math.min(H-1,Math.floor((e.clientY-r.top)/r.height*H)))}};
+cv.addEventListener('pointerdown',e=>{const c=cellAt(e);cv.setPointerCapture(e.pointerId);
+  if(c.x===start.x&&c.y===start.y)drag='s';else if(c.x===goal.x&&c.y===goal.y)drag='g';
+  else{drag='w';paint=walls[c.y*W+c.x]?0:1;walls[c.y*W+c.x]=paint;dirty=true}
+  if(state!=='idle')reset()});
+cv.addEventListener('pointermove',e=>{if(!drag)return;const c=cellAt(e),i=c.y*W+c.x;
+  if(drag==='w'){if(!(c.x===start.x&&c.y===start.y)&&!(c.x===goal.x&&c.y===goal.y)&&walls[i]!==paint){walls[i]=paint;dirty=true}}
+  else if(!walls[i]){if(drag==='s'&&!(c.x===goal.x&&c.y===goal.y))start=c;if(drag==='g'&&!(c.x===start.x&&c.y===start.y))goal=c}});
+cv.addEventListener('pointerup',()=>drag=null);
+function clearMap(){walls.fill(0);dirty=true;reset()}
+$('go').onclick=launch;$('stop').onclick=reset;$('clear').onclick=clearMap;
+$('rand').onclick=()=>{clearMap();for(let n=0;n<16;n++){const w=1+Math.floor(Math.random()*3),h=1+Math.floor(Math.random()*3),x=Math.floor(Math.random()*(W-w)),y=Math.floor(Math.random()*(H-h));
+  if(Math.abs(x-start.x)<5&&Math.abs(y-start.y)<5||Math.abs(x-goal.x)<5&&Math.abs(y-goal.y)<5)continue;
+  for(let a=0;a<w;a++)for(let b=0;b<h;b++)walls[(y+b)*W+x+a]=1}};
+$('corr').onclick=()=>{clearMap();for(const x of[12,20,28]){const gap=3+Math.floor(Math.random()*(H-9));for(let y=0;y<H;y++)if(y<gap||y>gap+3)walls[y*W+x]=1}};
+$('algo').onchange=()=>{reset();$('desc').textContent=DESC[$('algo').value]};
+$('desc').textContent=DESC.astar;
+for(let x=18;x<=20;x++)for(let y=6;y<=19;y++)walls[y*W+x]=1;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
